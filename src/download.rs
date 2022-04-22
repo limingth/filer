@@ -221,7 +221,7 @@ pub async fn download_files(
     let remote_file_list: Vec<(&str, u64, &str)> = parse_file_list(&remote_file_list);
     let file_count = remote_file_list.len();
     let file_size = remote_file_list.iter().map(|x| x.1).sum::<u64>();
-    let path = client_config["path"].str("d:/tcsoftV6");
+    let path = client_config["path"].str("./demo_sent");
     let max_tasks = client_config["max_tasks"].u64(max_tasks);
     let local_file_list = fs::read_to_string(String::from(path) + "/filelist.txt")
         .await

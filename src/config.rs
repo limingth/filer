@@ -49,7 +49,7 @@ mod tests {
         assert_eq!(
             config["server"],
             json!({
-                "static_path": "D:/Js/OnlyOne/public",
+                "static_path": "./public",
                 "server_name": "OnlyOne",
                 "http_active": true,
                 "http_port": 80,

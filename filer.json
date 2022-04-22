@@ -24,7 +24,7 @@
         "kill_running_exe": true
     },
     "tcsoftV6": {
-        "path": "d:/tcsoftV6",
+        "path": "./demo_sent",
         "part_size": 1024000,
         "max_tasks": 32,
         "list_name": "filelist.txt"

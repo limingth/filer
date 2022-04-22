@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
         let config = context.config[catalog].clone();
         let part_size = config["part_size"].u64(102400u64);
         let max_tasks = config["max_tasks"].u64(cpus * 2);
-        let path = config["path"].str("d:/tcsoftV6");
+        let path = config["path"].str("./demo_sent");
         refresh_dir_files_digest(path, "filelist.txt", part_size, max_tasks, show_repeat).await?;
     }
     #[cfg(feature = "xcopy")]
