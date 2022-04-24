@@ -17,15 +17,27 @@ mod static_files;
 mod addr;
 #[cfg(feature = "xcopy")]
 mod xcopy;
+use std::fs::{self, File};
+use std::path::{PathBuf, Path};
+use std::io::{self, BufRead};
+use byte_unit::Byte;
+
+
 #[cfg(any(feature = "server", feature = "download"))]
 use std::sync::Arc;
 #[cfg(any(feature = "server", feature = "download"))]
 use axum::{Router};
 
 
+use iced::{
+    button, text_input, Button,
+    Column, Container, Element, Length, Row, Application,
+    Settings, Text, TextInput, Command, Clipboard
+};
+
 
 use anyhow::Result;
-use clap::{Command, Arg, ArgMatches};
+use clap::{Arg, ArgMatches};
 use context::AppContext;
 use json_helper::JsonHelper;
 use tokio::time::Instant;
@@ -36,63 +48,280 @@ use fileutil::refresh_dir_files_digest;
 
 const VERSION: &str =env!("CARGO_PKG_VERSION");
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
 
-    let args = args();
-    let context = if let Some(config_file) = args.value_of("config") {
-        AppContext::from(config_file.into())
-    } else {
-        AppContext::new()
-    };
-    let cpus = num_cpus::get() as u64;
-    let time_start = Instant::now();
+fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
+where P: AsRef<Path>, {
+    let file = File::open(filename)?;
+    Ok(io::BufReader::new(file).lines())
+}
 
-    #[cfg(feature = "digest")]
-    let show_repeat = args.is_present("repeat");
-    if args.is_present("digest") || show_repeat {
-        let catalog = args.value_of("catalog").unwrap_or("tcsoftV6");
-        let config = context.config[catalog].clone();
-        let part_size = config["part_size"].u64(102400u64);
-        let max_tasks = config["max_tasks"].u64(cpus * 2);
-        let path = config["path"].str("./demo_sent");
-        refresh_dir_files_digest(path, "filelist.txt", part_size, max_tasks, show_repeat).await?;
-    }
-    #[cfg(feature = "xcopy")]
-    if args.is_present("xcopy") {
-        let config = context.config.clone();
-        let source_path = args.value_of("source_path").unwrap_or("");
-        let target_path = args.value_of("target_path").unwrap_or("");
-        if source_path.is_empty() || target_path.is_empty() {
-            println!("Usage: filer --xcopy source_path target_path")
-        } else {
-            xcopy::xcopy_files(&config, source_path, target_path, cpus * 2).await?;
-        }
-    }
-    if args.is_present("server") {
-        println!();
-        #[cfg(feature = "server")]
-        server(&context).await;
-    } else if args.is_present("download") || args.is_present("update") {
-        let catalog = args.value_of("catalog").unwrap_or("tcsoftV6");
-        #[cfg(feature = "download")]
-        download::download_files(
-            &context.config,
-            args.is_present("download"),
-            cpus * 4,
-            catalog,
+#[derive(Default)]
+struct Gui {
+    input: text_input::State,
+    input_value: String,
+    button: button::State,
+    display_value: String,
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    InputChanged(String),
+    ButtonPressed,
+    ServerStarted(bool),
+}
+
+
+impl Application for Gui {
+    type Message = Message;
+    type Executor = iced::executor::Default;
+    type Flags = ();
+
+    fn new(_flags: ()) -> (Self, Command<Message>) {
+        (
+            Gui::default(),
+            Command::none()
         )
-        .await?;
-        println!();
     }
-    let pcpus = num_cpus::get_physical() as u64;
-    println!(
-        "Time taken: {}\nNumber of CPU cores: {}x{}",
-        time_taken(time_start),
-        pcpus,
-        cpus / pcpus
-    );
+
+    fn title(&self) -> String {
+        String::from("GUI")
+    }
+
+    fn update(&mut self, message: Message, _:&mut Clipboard) -> Command<Message> {
+        match message {
+            Message::InputChanged(value) => self.input_value = value,
+            Message::ServerStarted(started) => {
+                println!("ServerStarted: {started}");
+
+                // 显示filelist.txt
+                if started {
+                    let mut path = if self.path.starts_with(".") {
+                        // 相对路径
+                        fs::canonicalize(PathBuf::from(&self.path)).unwrap()
+                    } else { PathBuf::from(&self.path) };
+
+                    path.extend(["filelist.txt"]);
+
+                    println!("{path:?}");
+
+                    match read_lines(path) {
+                        Err(e) => self.display_value = format!("Failed to read filelist.txt: {e}"),
+                        Ok(lines) => {
+                            let mut total = String::new();
+                            for line in lines {
+                                if let Ok(line) = line {
+                                    println!("{}", line);
+                                    let parts:Vec<&str> = line.split(",").collect();
+
+                                    let size = parts[1];
+                                    let file_path = parts[2];
+
+                                    let size = Byte::from_bytes(size.parse::<u128>().unwrap()).get_appropriate_unit(false);
+                                    total.push_str(&format!("{file_path:<50}{size}\r\n"));
+                                }      
+                            }
+                            self.display_value = total;
+                        }
+                    }
+
+                    // match fs::read_to_string(path) {
+                    //     Ok(content) => {
+                    //         self.display_value = content;
+                    //     },
+                    //     Err(e) => {
+                    //         self.display_value = format!("Failed to read filelist.txt: {e}");
+                    //     }
+                    // }
+                } else {
+                    self.display_value = "Failed to start service".to_owned();
+                }
+
+
+                
+            },
+            Message::ButtonPressed => {
+                println!("{}", self.input_value);
+
+
+                // let path = config["path"].str("./demo_sent");
+                let path = if &self.input_value == "" { "./" } else { &self.input_value };
+
+                match fs::metadata(path) {
+                    Ok(metadata) if metadata.is_dir() => {
+                        println!("is dir: {path}");
+                        self.path = PathBuf::from(path);
+                        return Command::perform(
+                            handle_start_server(path.to_owned()),
+                            |result| {
+                                match result {
+                                    Ok(_) =>  Message::ServerStarted(true),
+                                    _ =>  Message::ServerStarted(false)
+                                }
+                            },
+                        );
+                    },
+                    _ => {
+                        self.display_value = format!("{path} is not a dirctory.");
+                        self.input_value = "".to_owned();
+                        return Command::none()
+                    }
+                };
+
+                // match fs::read_to_string(self.input_value.to_string()) {
+                //     Err(e) => {
+                //         println!("{e}");
+                //         self.input_value = "".to_owned();
+                //         self.display_value = e.to_string();
+                //     },
+                //     Ok(f) => {
+                //         println!("{f}");
+                //         self.display_value = f;
+                //     }
+                // }
+            }
+        }
+
+        Command::none()
+    }
+
+    fn view(&mut self) -> Element<Message> {
+ 
+        let text_input = TextInput::new(
+            &mut self.input,
+            "Type file directory, default: ./",
+            &self.input_value,
+            Message::InputChanged,
+        )
+        .padding(10)
+        .size(20);
+
+        let button = Button::new(&mut self.button, Text::new("Get Upload File List"))
+            .padding(10)
+            .on_press(Message::ButtonPressed);
+        
+                
+        let display: Text = Text::new(&self.display_value).into();
+
+        let content = Column::new()
+            .spacing(20)
+            .padding(20)
+            .max_width(600)
+            .push(Row::new().spacing(10).push(text_input).push(button))
+            .push(display);
+
+        Container::new(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            // .center_x()
+            // .center_y()
+            .into()
+    }
+}
+
+
+async fn handle_start_server(path: String) -> Result<()> {
+    
+
+    println!("Recevied {path}");
+    
+    let context = AppContext::new();
+    let cpus = num_cpus::get() as u64;
+    // let time_start = Instant::now();
+
+    // let catalog = args.value_of("catalog").unwrap_or("tcsoftV6");
+    let catalog = "tcsoftV6";
+    let config = context.config[catalog].clone();
+    let part_size = config["part_size"].u64(102400u64);
+    let max_tasks = config["max_tasks"].u64(cpus * 2);
+
+    let show_repeat = true;
+
+    refresh_dir_files_digest(&path, "filelist.txt", part_size, max_tasks, show_repeat).await?;
+
+
+    // * Server Start ====================================
+
+    let server_task = tokio::spawn(async move {
+        println!("Start server...");
+        server(&context).await;
+    });
+
+    // let _ = tokio::join!(server_task);
+
+    println!("Server started!");
+
+    // * Server End ====================================
+    Ok(())
+}
+
+// #[tokio::main]
+// async fn main() -> Result<()> {
+fn main() -> Result<()> {
+
+    // * GUI Start ====================================
+
+    println!("Before GUI");
+    let _ = Gui::run(Settings::default());
+    println!("After GUI");
+
+    // * GUI End ====================================
+
+    // tracing_subscriber::fmt::init();
+
+    // let args = args();
+    // let context = if let Some(config_file) = args.value_of("config") {
+    //     AppContext::from(config_file.into())
+    // } else {
+    //     AppContext::new()
+    // };
+    // let cpus = num_cpus::get() as u64;
+    // let time_start = Instant::now();
+
+    // #[cfg(feature = "digest")]
+    // let show_repeat = args.is_present("repeat");
+    // if args.is_present("digest") || show_repeat {
+    //     let catalog = args.value_of("catalog").unwrap_or("tcsoftV6");
+    //     let config = context.config[catalog].clone();
+    //     let part_size = config["part_size"].u64(102400u64);
+    //     let max_tasks = config["max_tasks"].u64(cpus * 2);
+    //     let path = config["path"].str("./demo_sent");
+    //     refresh_dir_files_digest(path, "filelist.txt", part_size, max_tasks, show_repeat).await?;
+    // }
+    // #[cfg(feature = "xcopy")]
+    // if args.is_present("xcopy") {
+    //     let config = context.config.clone();
+    //     let source_path = args.value_of("source_path").unwrap_or("");
+    //     let target_path = args.value_of("target_path").unwrap_or("");
+    //     if source_path.is_empty() || target_path.is_empty() {
+    //         println!("Usage: filer --xcopy source_path target_path")
+    //     } else {
+    //         xcopy::xcopy_files(&config, source_path, target_path, cpus * 2).await?;
+    //     }
+    // }
+    // if args.is_present("server") {
+    //     println!();
+    //     #[cfg(feature = "server")]
+        // server(&context).await;
+    // } else if args.is_present("download") || args.is_present("update") {
+    //     let catalog = args.value_of("catalog").unwrap_or("tcsoftV6");
+    //     #[cfg(feature = "download")]
+    //     download::download_files(
+    //         &context.config,
+    //         args.is_present("download"),
+    //         cpus * 4,
+    //         catalog,
+    //     )
+    //     .await?;
+    //     println!();
+    // }
+    // let pcpus = num_cpus::get_physical() as u64;
+    // println!(
+    //     "Time taken: {}\nNumber of CPU cores: {}x{}",
+    //     time_taken(time_start),
+    //     pcpus,
+    //     cpus / pcpus
+    // );
     Ok(())
 }
 
@@ -148,7 +377,7 @@ async fn start_server(config: Value, is_https: bool, app: Router) {
 }
 
 fn args() -> ArgMatches {
-    let app = Command::new("Filer 文件传输系统")
+    let app = clap::Command::new("Filer 文件传输系统")
         .version(VERSION)
         .author("xander.xiao@gmail.com")
         .about("极速文件分发、拷贝工具")

@@ -1,3 +1,4 @@
 /target
 /demo*
 /public/*.exe
+/**/filelist.txt
