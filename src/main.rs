@@ -30,9 +30,10 @@ use axum::{Router};
 
 
 use iced::{
-    button, text_input, Button,
+    button, text_input, scrollable, Button,
     Column, Container, Element, Length, Row, Application,
-    Settings, Text, TextInput, Command, Clipboard
+    Settings, Text, TextInput, Command, Clipboard, Scrollable,
+    Align
 };
 
 
@@ -60,8 +61,16 @@ struct Gui {
     input: text_input::State,
     input_value: String,
     button: button::State,
-    display_value: String,
+    message_tip: String,
+    file_list: Vec<FileInfo>,
     path: PathBuf,
+    scrollable: scrollable::State
+}
+
+struct FileInfo {
+    path: String,
+    size: String,
+    // scrollable: scrollable::State,
 }
 
 #[derive(Debug, Clone)]
@@ -106,9 +115,11 @@ impl Application for Gui {
                     println!("{path:?}");
 
                     match read_lines(path) {
-                        Err(e) => self.display_value = format!("Failed to read filelist.txt: {e}"),
+                        Err(e) => self.message_tip = format!("Failed to read filelist.txt: {e}"),
                         Ok(lines) => {
-                            let mut total = String::new();
+                            let mut totle = Vec::new();
+                            let mut count: usize = 0;
+                            let mut total_size: u128 = 0;
                             for line in lines {
                                 if let Ok(line) = line {
                                     println!("{}", line);
@@ -116,25 +127,28 @@ impl Application for Gui {
 
                                     let size = parts[1];
                                     let file_path = parts[2];
-
-                                    let size = Byte::from_bytes(size.parse::<u128>().unwrap()).get_appropriate_unit(false);
-                                    total.push_str(&format!("{file_path:<50}{size}\r\n"));
+                                    let size = size.parse::<u128>().unwrap();
+                                    total_size += size;
+                                    let size = Byte::from_bytes(size).get_appropriate_unit(false);
+                                    totle.push(FileInfo{path: file_path.to_owned(), size: format!("{size}")});
+                                    count += 1;
                                 }      
                             }
-                            self.display_value = total;
+                            self.file_list = totle;
+                            self.message_tip = format!("Total {} files with size {}.", count, Byte::from_bytes(total_size).get_appropriate_unit(false));
                         }
                     }
 
                     // match fs::read_to_string(path) {
                     //     Ok(content) => {
-                    //         self.display_value = content;
+                    //         self.message_tip = content;
                     //     },
                     //     Err(e) => {
-                    //         self.display_value = format!("Failed to read filelist.txt: {e}");
+                    //         self.message_tip = format!("Failed to read filelist.txt: {e}");
                     //     }
                     // }
                 } else {
-                    self.display_value = "Failed to start service".to_owned();
+                    self.message_tip = "Failed to start service".to_owned();
                 }
 
 
@@ -150,6 +164,7 @@ impl Application for Gui {
                 match fs::metadata(path) {
                     Ok(metadata) if metadata.is_dir() => {
                         println!("is dir: {path}");
+                        self.message_tip = format!("Reading files in {path}......");
                         self.path = PathBuf::from(path);
                         return Command::perform(
                             handle_start_server(path.to_owned()),
@@ -162,23 +177,11 @@ impl Application for Gui {
                         );
                     },
                     _ => {
-                        self.display_value = format!("{path} is not a dirctory.");
+                        self.message_tip = format!("{path} is not a dirctory.");
                         self.input_value = "".to_owned();
                         return Command::none()
                     }
                 };
-
-                // match fs::read_to_string(self.input_value.to_string()) {
-                //     Err(e) => {
-                //         println!("{e}");
-                //         self.input_value = "".to_owned();
-                //         self.display_value = e.to_string();
-                //     },
-                //     Ok(f) => {
-                //         println!("{f}");
-                //         self.display_value = f;
-                //     }
-                // }
             }
         }
 
@@ -201,19 +204,54 @@ impl Application for Gui {
             .on_press(Message::ButtonPressed);
         
                 
-        let display: Text = Text::new(&self.display_value).into();
+        let message_tip: Text = Text::new(&self.message_tip).into();
+
+
+        let mut file_list_scrollable = Scrollable::new(&mut self.scrollable)
+            .padding(10)
+            .spacing(10)
+            .scrollbar_margin(0)
+            .scrollbar_width(6)
+            .scroller_width(5)
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+        for file_info in &self.file_list {
+            file_list_scrollable = file_list_scrollable.push(
+                Row::new()
+                    .push(
+                        Column::new()
+                            .push(
+                                Text::new(file_info.path.clone())
+                            )
+                            .width(Length::Fill)
+                            .align_items(Align::Start)
+                        )
+                    .push(
+                        Column::new()
+                        .push(
+                            Text::new(file_info.size.clone())
+                        )
+                        .width(Length::Shrink)
+                        .align_items(Align::End)
+                    )
+            )
+        };
 
         let content = Column::new()
             .spacing(20)
             .padding(20)
-            .max_width(600)
+            // .max_width(600)
+            .width(Length::Fill)
+            // .align_items(Align::Center)
             .push(Row::new().spacing(10).push(text_input).push(button))
-            .push(display);
+            .push(message_tip)
+            .push(file_list_scrollable);
 
         Container::new(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            // .center_x()
+            .center_x()
             // .center_y()
             .into()
     }
@@ -242,7 +280,7 @@ async fn handle_start_server(path: String) -> Result<()> {
 
     // * Server Start ====================================
 
-    let server_task = tokio::spawn(async move {
+    tokio::spawn(async move {
         println!("Start server...");
         server(&context).await;
     });
