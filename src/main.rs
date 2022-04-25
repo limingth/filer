@@ -163,8 +163,8 @@ impl Application for Gui {
                 println!("{}", self.input_value);
 
 
-                // let path = config["path"].str("./demo_sent");
-                let path = if &self.input_value == "" { "./" } else { &self.input_value };
+                let path = "./demo_sent";
+                // let path = if &self.input_value == "" { "./" } else { &self.input_value };
 
                 match fs::metadata(path) {
                     Ok(metadata) if metadata.is_dir() => {
@@ -249,7 +249,12 @@ impl Application for Gui {
             // .max_width(600)
             .width(Length::Fill)
             // .align_items(Align::Center)
-            .push(Row::new().spacing(10).push(text_input).push(button))
+            .push(
+                Row::new()
+                    .spacing(10)
+                    // .push(text_input)
+                    .push(button)
+                )
             .push(message_tip)
             .push(file_list_scrollable);
 
