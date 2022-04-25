@@ -75,3 +75,5 @@ server = [
     "chrono",
 ]
 xcopy = []
+client-gui = []
+server-gui = []

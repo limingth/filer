@@ -17,6 +17,7 @@ mod static_files;
 mod addr;
 #[cfg(feature = "xcopy")]
 mod xcopy;
+use std::f32::consts::E;
 use std::fs::{self, File};
 use std::path::{PathBuf, Path};
 use std::io::{self, BufRead};
@@ -83,6 +84,7 @@ enum Message {
     InputChanged(String),
     ButtonPressed,
     ServerStarted(bool),
+    DownloadCompleted(bool)
 }
 
 
@@ -159,34 +161,56 @@ impl Application for Gui {
 
                 
             },
+            Message::DownloadCompleted(completed) => {
+                if completed {
+                    self.message_tip = "Download completed".to_owned();
+                } else {
+                    self.message_tip = "Download error".to_owned();
+                }
+            }
             Message::ButtonPressed => {
                 println!("{}", self.input_value);
 
+                #[cfg(feature = "client-gui")]
+                {
+                    let path = "./demo_sent";
+                    // let path = if &self.input_value == "" { "./" } else { &self.input_value };
 
-                let path = "./demo_sent";
-                // let path = if &self.input_value == "" { "./" } else { &self.input_value };
+                    match fs::metadata(path) {
+                        Ok(metadata) if metadata.is_dir() => {
+                            println!("is dir: {path}");
+                            self.message_tip = format!("Reading files in {path}......");
+                            self.path = PathBuf::from(path);
+                            return Command::perform(
+                                handle_start_server(path.to_owned()),
+                                |result| {
+                                    match result {
+                                        Ok(_) =>  Message::ServerStarted(true),
+                                        _ =>  Message::ServerStarted(false)
+                                    }
+                                },
+                            );
+                        },
+                        _ => {
+                            self.message_tip = format!("{path} is not a dirctory.");
+                            self.input_value = "".to_owned();
+                            return Command::none()
+                        }
+                    };
+                }
 
-                match fs::metadata(path) {
-                    Ok(metadata) if metadata.is_dir() => {
-                        println!("is dir: {path}");
-                        self.message_tip = format!("Reading files in {path}......");
-                        self.path = PathBuf::from(path);
-                        return Command::perform(
-                            handle_start_server(path.to_owned()),
-                            |result| {
-                                match result {
-                                    Ok(_) =>  Message::ServerStarted(true),
-                                    _ =>  Message::ServerStarted(false)
-                                }
-                            },
-                        );
-                    },
-                    _ => {
-                        self.message_tip = format!("{path} is not a dirctory.");
-                        self.input_value = "".to_owned();
-                        return Command::none()
-                    }
-                };
+                #[cfg(feature = "server-gui")]
+                {
+                    // println!("server-gui")
+                    self.input_value = "Downloading......".to_owned();
+                    return Command::perform(
+                        handle_start_download(),
+                        |completed| {
+                            Message::DownloadCompleted(completed)
+                        },
+                    );
+                }
+
             }
         }
 
@@ -204,7 +228,15 @@ impl Application for Gui {
         .padding(10)
         .size(20);
 
-        let button = Button::new(&mut self.button, Text::new("Get Upload File List"))
+        let button_text = "";
+
+        #[cfg(feature = "client-gui")]
+        let button_text = "Get File List";
+
+        #[cfg(feature = "server-gui")]
+        let button_text = "Download";
+
+        let button = Button::new(&mut self.button, Text::new(button_text))
             .padding(10)
             .on_press(Message::ButtonPressed);
         
@@ -267,6 +299,39 @@ impl Application for Gui {
     }
 }
 
+
+async fn handle_start_download() -> bool {
+    let context = AppContext::new();
+
+    let cpus = num_cpus::get() as u64;
+    let time_start = Instant::now();
+
+    let catalog = "tcsoftV6";
+    let res = download::download_files(
+        &context.config,
+        true,
+        cpus * 4,
+        catalog,
+    )
+    .await;
+
+    match res {
+        Ok(_) => {
+            let pcpus = num_cpus::get_physical() as u64;
+            println!(
+                "Time taken: {}\nNumber of CPU cores: {}x{}",
+                time_taken(time_start),
+                pcpus,
+                cpus / pcpus
+            );
+            return true;
+        },
+        Err(e) => {
+            println!("Download Error: {e}");
+            return false;
+        }
+    }
+}
 
 async fn handle_start_server(path: String) -> Result<()> {
     
