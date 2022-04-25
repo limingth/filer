@@ -28,6 +28,11 @@ use std::sync::Arc;
 #[cfg(any(feature = "server", feature = "download"))]
 use axum::{Router};
 
+use tokio::sync::Mutex;
+use once_cell::sync::Lazy;
+
+pub static SERVER_HANDLE:Lazy<Mutex<Vec<axum_server::Handle>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
 
 use iced::{
     button, text_input, scrollable, Button,
@@ -277,6 +282,24 @@ async fn handle_start_server(path: String) -> Result<()> {
 
     refresh_dir_files_digest(&path, "filelist.txt", part_size, max_tasks, show_repeat).await?;
 
+    tokio::spawn(async {
+        println!("Shutdown start=========================================================================");
+        // clear all prev server
+        let mut handles = SERVER_HANDLE.lock().await;
+
+        loop {
+            if let Some(handle) = handles.pop() {
+                println!("Shutdown prev server ...");
+                handle.shutdown();
+            } else {
+                println!("Break Shutdown prev server loop");
+                break;
+            }
+        }
+
+        println!("Shutdown end ================================================================================")
+
+    });
 
     // * Server Start ====================================
 
@@ -401,9 +424,19 @@ async fn start_server(config: Value, is_https: bool, app: Router) {
             let tls_config = RustlsConfig::from_pem_file("server.cer", "server.key")
                 .await
                 .unwrap();
-            axum_server::bind_rustls(addr, tls_config).serve(app).await
+            let handle = axum_server::Handle::new();
+            SERVER_HANDLE.lock().await.push(handle.clone());
+
+            axum_server::bind_rustls(addr, tls_config)
+                .handle(handle)
+                .serve(app).await
         } else {
-            axum_server::bind(addr).serve(app).await
+            let handle = axum_server::Handle::new();
+            SERVER_HANDLE.lock().await.push(handle.clone());
+
+            axum_server::bind(addr)
+            .handle(handle)
+            .serve(app).await
         };
         server.unwrap();
     } else {

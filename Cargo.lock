@@ -835,6 +835,7 @@ dependencies = [
  "futures-util",
  "iced",
  "num_cpus",
+ "once_cell",
  "reqwest",
  "serde",
  "serde_json",
