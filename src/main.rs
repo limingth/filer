@@ -375,7 +375,6 @@ async fn get_remote_file_list(config: Value, catalog: &str) -> MyResult<String> 
     Ok(remote_file_list)
 }
 
-#[cfg(feature = "server-gui")]
 async fn handle_start_download() -> bool {
     let context = AppContext::new();
 
@@ -470,7 +469,16 @@ fn main() -> MyResult<()> {
     // * GUI Start ====================================
 
     println!("Before GUI");
-    let _ = Gui::run(Settings::default());
+    // let _ = Gui::run(Settings::default());
+    let _ = Gui::run(Settings {
+        default_font: Some(include_bytes!(
+          "./hei.ttf"
+        // "./fangzheng.ttf"
+        // "./simhei.ttf"
+        )),
+        ..Settings::default()
+      });
+
     println!("After GUI");
 
     // * GUI End ====================================
