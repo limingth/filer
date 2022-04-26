@@ -61,7 +61,7 @@ tower-http = { version = "0.2.5", features = [
 #regex = "1.4.3"
 
 [features]
-default = ["xcopy", "digest", "download", "server"]
+default = ["xcopy", "digest", "download", "server", "server-gui"]
 digest = ["blake3"]
 download = ["reqwest", "blake3"]
 server = [

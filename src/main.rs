@@ -17,7 +17,6 @@ mod static_files;
 mod addr;
 #[cfg(feature = "xcopy")]
 mod xcopy;
-use std::f32::consts::E;
 use std::fs::{self, File};
 use std::path::{PathBuf, Path};
 use std::io::{self, BufRead};
@@ -43,7 +42,7 @@ use iced::{
 };
 
 
-use anyhow::Result;
+// use anyhow::{Result, Ok};
 use clap::{Arg, ArgMatches};
 use context::AppContext;
 use json_helper::JsonHelper;
@@ -55,6 +54,7 @@ use fileutil::refresh_dir_files_digest;
 
 const VERSION: &str =env!("CARGO_PKG_VERSION");
 
+type MyResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
 where P: AsRef<Path>, {
@@ -82,8 +82,10 @@ struct FileInfo {
 #[derive(Debug, Clone)]
 enum Message {
     InputChanged(String),
-    ButtonPressed,
+    GetFileListButtonPressed,
+    DownLoadButtonPressed,
     ServerStarted(bool),
+    RemoteFileListGetted((bool, String)),
     DownloadCompleted(bool)
 }
 
@@ -101,7 +103,11 @@ impl Application for Gui {
     }
 
     fn title(&self) -> String {
-        String::from("GUI")
+        #[cfg(feature = "server-gui")]
+        return String::from("Server");
+
+        #[cfg(feature = "client-gui")]
+        return String::from("Client");
     }
 
     fn update(&mut self, message: Message, _:&mut Clipboard) -> Command<Message> {
@@ -122,10 +128,10 @@ impl Application for Gui {
                     println!("{path:?}");
 
                     match read_lines(path) {
-                        Err(e) => self.message_tip = format!("Failed to read filelist.txt: {e}"),
+                        Err(e) => self.message_tip = format!("Failed to read local filelist.txt: {e}"),
                         Ok(lines) => {
                             let mut totle = Vec::new();
-                            let mut count: usize = 0;
+                            let mut file_count: usize = 0;
                             let mut total_size: u128 = 0;
                             for line in lines {
                                 if let Ok(line) = line {
@@ -138,29 +144,40 @@ impl Application for Gui {
                                     total_size += size;
                                     let size = Byte::from_bytes(size).get_appropriate_unit(false);
                                     totle.push(FileInfo{path: file_path.to_owned(), size: format!("{size}")});
-                                    count += 1;
+                                    file_count += 1;
                                 }      
                             }
                             self.file_list = totle;
-                            self.message_tip = format!("Total {} files with size {}.", count, Byte::from_bytes(total_size).get_appropriate_unit(false));
+                            self.message_tip = format!("Total {} files with size {}.", file_count, Byte::from_bytes(total_size).get_appropriate_unit(false));
                         }
                     }
-
-                    // match fs::read_to_string(path) {
-                    //     Ok(content) => {
-                    //         self.message_tip = content;
-                    //     },
-                    //     Err(e) => {
-                    //         self.message_tip = format!("Failed to read filelist.txt: {e}");
-                    //     }
-                    // }
                 } else {
                     self.message_tip = "Failed to start service".to_owned();
                 }
-
-
-                
             },
+            Message::RemoteFileListGetted((geted, file_list)) => {
+                if !geted {
+                    println!("Failed to get remote filelist.txt");
+                    self.message_tip = format!("Failed to get remote filelist.txt");
+                } else {
+                    let remote_file_list = download::parse_file_list(&file_list);
+                    let file_count = remote_file_list.len();
+
+                    let mut totle = Vec::new();
+
+                    let total_size = remote_file_list.iter().map(|x| x.1).sum::<u64>();
+    
+                    for file_info in remote_file_list {
+                        totle.push(FileInfo{path: file_info.2.to_owned(), size: format!("{}", Byte::from_bytes(file_info.1 as u128).get_appropriate_unit(false))});
+                    }
+
+                    self.file_list = totle;
+                    self.message_tip = format!("Total {} files with size {}.", file_count, Byte::from_bytes(total_size as u128).get_appropriate_unit(false));
+                }
+            },
+            Message::DownLoadButtonPressed => {
+
+            }
             Message::DownloadCompleted(completed) => {
                 if completed {
                     self.message_tip = "Download completed".to_owned();
@@ -168,7 +185,7 @@ impl Application for Gui {
                     self.message_tip = "Download error".to_owned();
                 }
             }
-            Message::ButtonPressed => {
+            Message::GetFileListButtonPressed => {
                 println!("{}", self.input_value);
 
                 #[cfg(feature = "client-gui")]
@@ -202,11 +219,17 @@ impl Application for Gui {
                 #[cfg(feature = "server-gui")]
                 {
                     // println!("server-gui")
-                    self.input_value = "Downloading......".to_owned();
+                    self.message_tip = "Getting file list ...".to_owned();
+                    let context = AppContext::new();
+                    let catalog = "tcsoftV6";
+
                     return Command::perform(
-                        handle_start_download(),
-                        |completed| {
-                            Message::DownloadCompleted(completed)
+                        get_remote_file_list(context.config.clone(), catalog),
+                        |file_list| {
+                            match file_list {
+                                Ok(file_list) => Message::RemoteFileListGetted((true, file_list)),
+                                Err(_) => Message::RemoteFileListGetted((false, String::new()))
+                            }
                         },
                     );
                 }
@@ -228,17 +251,15 @@ impl Application for Gui {
         .padding(10)
         .size(20);
 
-        let button_text = "";
-
         #[cfg(feature = "client-gui")]
-        let button_text = "Get File List";
+        let button_text = "Get Local File List";
 
         #[cfg(feature = "server-gui")]
-        let button_text = "Download";
+        let button_text = "Get Remote File List";
 
         let button = Button::new(&mut self.button, Text::new(button_text))
             .padding(10)
-            .on_press(Message::ButtonPressed);
+            .on_press(Message::GetFileListButtonPressed);
         
                 
         let message_tip: Text = Text::new(&self.message_tip).into();
@@ -299,7 +320,19 @@ impl Application for Gui {
     }
 }
 
+async fn get_remote_file_list(config: Value, catalog: &str) -> MyResult<String> {
+    println!("Start downloading filelist.txt");
+    let client_config = &config["client"];
+    let catalog = client_config["catalog"].string(catalog);
+    let base_url = download::base_url(client_config);
+    let (_, _, bytes) = download::get_full_of_file(&base_url, &catalog, "filelist.txt").await?;
+    let remote_file_list: String = String::from_utf8(bytes).unwrap();
 
+    println!("filelist.txt getted");
+    Ok(remote_file_list)
+}
+
+#[cfg(feature = "server-gui")]
 async fn handle_start_download() -> bool {
     let context = AppContext::new();
 
@@ -333,7 +366,8 @@ async fn handle_start_download() -> bool {
     }
 }
 
-async fn handle_start_server(path: String) -> Result<()> {
+#[cfg(feature = "client-gui")]
+async fn handle_start_server(path: String) -> MyResult<()> {
     
 
     println!("Recevied {path}");
@@ -388,7 +422,7 @@ async fn handle_start_server(path: String) -> Result<()> {
 
 // #[tokio::main]
 // async fn main() -> Result<()> {
-fn main() -> Result<()> {
+fn main() -> MyResult<()> {
 
     // * GUI Start ====================================
 

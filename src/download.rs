@@ -184,7 +184,7 @@ async fn download_file(
 }
 
 //(digest,size,name)
-fn parse_file_list(str: &str) -> Vec<(&str, u64, &str)> {
+pub fn parse_file_list(str: &str) -> Vec<(&str, u64, &str)> {
     let file_list: Vec<(&str, u64, &str)> = str
         .split(EOL)
         .filter(|x| !x.is_empty())
