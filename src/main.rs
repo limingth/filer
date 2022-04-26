@@ -1,3 +1,5 @@
+// #![windows_subsystem = "windows"]
+
 mod config;
 mod context;
 mod fileutil;
@@ -66,11 +68,14 @@ where P: AsRef<Path>, {
 struct Gui {
     input: text_input::State,
     input_value: String,
-    button: button::State,
+    get_file_list_button: button::State,
+    download_button: button::State,
     message_tip: String,
     file_list: Vec<FileInfo>,
+    remote_file_getted: bool,
+    is_downloading: bool,
     path: PathBuf,
-    scrollable: scrollable::State
+    scrollable: scrollable::State,
 }
 
 struct FileInfo {
@@ -159,7 +164,9 @@ impl Application for Gui {
                 if !geted {
                     println!("Failed to get remote filelist.txt");
                     self.message_tip = format!("Failed to get remote filelist.txt");
+                    self.remote_file_getted = false;
                 } else {
+                    self.remote_file_getted = true;
                     let remote_file_list = download::parse_file_list(&file_list);
                     let file_count = remote_file_list.len();
 
@@ -176,7 +183,24 @@ impl Application for Gui {
                 }
             },
             Message::DownLoadButtonPressed => {
+                if !self.remote_file_getted {
+                    self.message_tip = "Please get file list first.".to_owned();
+                    return Command::none();
+                }
 
+                if self.is_downloading {
+                    return Command::none();
+                }
+
+                self.is_downloading = true;
+
+                return Command::perform(
+                    handle_start_download(),
+                    |completed| {
+                        println!("Download Completed");
+                        Message::DownloadCompleted(completed)
+                    }
+                )
             }
             Message::DownloadCompleted(completed) => {
                 if completed {
@@ -184,6 +208,7 @@ impl Application for Gui {
                 } else {
                     self.message_tip = "Download error".to_owned();
                 }
+                self.is_downloading = false;
             }
             Message::GetFileListButtonPressed => {
                 println!("{}", self.input_value);
@@ -220,6 +245,9 @@ impl Application for Gui {
                 {
                     // println!("server-gui")
                     self.message_tip = "Getting file list ...".to_owned();
+                    self.file_list.clear();
+
+
                     let context = AppContext::new();
                     let catalog = "tcsoftV6";
 
@@ -257,7 +285,7 @@ impl Application for Gui {
         #[cfg(feature = "server-gui")]
         let button_text = "Get Remote File List";
 
-        let button = Button::new(&mut self.button, Text::new(button_text))
+        let button = Button::new(&mut self.get_file_list_button, Text::new(button_text))
             .padding(10)
             .on_press(Message::GetFileListButtonPressed);
         
@@ -296,6 +324,18 @@ impl Application for Gui {
             )
         };
 
+        // server端的下载按钮
+        #[cfg(feature = "server-gui")]
+        let footer = Column::with_children(vec![
+            Button::new(&mut self.download_button, Text::new(if self.is_downloading {"Downloading"} else {"Download"}))
+                .padding(10)
+                .on_press(Message::DownLoadButtonPressed)
+                .into(),
+        ])
+        .width(Length::Fill)
+        .align_items(Align::End);
+        // server端的进度条
+
         let content = Column::new()
             .spacing(20)
             .padding(20)
@@ -310,6 +350,9 @@ impl Application for Gui {
                 )
             .push(message_tip)
             .push(file_list_scrollable);
+        
+        #[cfg(feature = "server-gui")]
+        let content = content.push(footer);
 
         Container::new(content)
             .width(Length::Fill)
@@ -551,99 +594,99 @@ async fn start_server(config: Value, is_https: bool, app: Router) {
     }
 }
 
-fn args() -> ArgMatches {
-    let app = clap::Command::new("Filer 文件传输系统")
-        .version(VERSION)
-        .author("xander.xiao@gmail.com")
-        .about("极速文件分发、拷贝工具")
-        .mut_arg("version", |a| a.help(Some("显示版本号")))
-        .mut_arg("help", |a| a.help(Some("显示帮助信息")))
-        .arg(
-            Arg::new("config")
-                .help("指定配置文件")
-                .short('C')
-                .long("config")
-                .value_name("config")
-                .takes_value(true)
-                .default_value("filer.json"),
-        );
+// fn args() -> ArgMatches {
+//     let app = clap::Command::new("Filer 文件传输系统")
+//         .version(VERSION)
+//         .author("xander.xiao@gmail.com")
+//         .about("极速文件分发、拷贝工具")
+//         .mut_arg("version", |a| a.help(Some("显示版本号")))
+//         .mut_arg("help", |a| a.help(Some("显示帮助信息")))
+//         .arg(
+//             Arg::new("config")
+//                 .help("指定配置文件")
+//                 .short('C')
+//                 .long("config")
+//                 .value_name("config")
+//                 .takes_value(true)
+//                 .default_value("filer.json"),
+//         );
 
-    #[cfg(any(feature = "server", feature = "calc_digest", feature = "download"))]
-    let app = app.arg(
-        Arg::new("catalog")
-            .help("指定分发目录")
-            .short('c')
-            .long("catalog")
-            .value_name("catalog")
-            .takes_value(true)
-            .default_value("tcsoftV6"),
-    );
+//     #[cfg(any(feature = "server", feature = "calc_digest", feature = "download"))]
+//     let app = app.arg(
+//         Arg::new("catalog")
+//             .help("指定分发目录")
+//             .short('c')
+//             .long("catalog")
+//             .value_name("catalog")
+//             .takes_value(true)
+//             .default_value("tcsoftV6"),
+//     );
 
-    #[cfg(feature = "digest")]
-    let app = app.arg(
-        Arg::new("digest")
-            .help("刷新文件列表，计算文件的哈希值")
-            .short('i')
-            .long("index"),
-    );
+//     #[cfg(feature = "digest")]
+//     let app = app.arg(
+//         Arg::new("digest")
+//             .help("刷新文件列表，计算文件的哈希值")
+//             .short('i')
+//             .long("index"),
+//     );
 
-    #[cfg(feature = "digest")]
-    let app = app.arg(
-        Arg::new("repeat")
-            .help("刷新文件哈希值列表时，列出重复文件")
-            .short('r')
-            .long("repeat"),
-    );
+//     #[cfg(feature = "digest")]
+//     let app = app.arg(
+//         Arg::new("repeat")
+//             .help("刷新文件哈希值列表时，列出重复文件")
+//             .short('r')
+//             .long("repeat"),
+//     );
 
-    #[cfg(feature = "xcopy")]
-    let app = app
-        .arg(
-            Arg::new("xcopy")
-                .help("复制文件夹或文件")
-                .short('x')
-                .long("xcopy"),
-        )
-        .arg(
-            Arg::new("source_path")
-                .help("Sets the XCopy source path or file")
-                .index(1),
-        )
-        .arg(
-            Arg::new("target_path")
-                .help("Sets the XCopy target path")
-                .index(2),
-        );
+//     #[cfg(feature = "xcopy")]
+//     let app = app
+//         .arg(
+//             Arg::new("xcopy")
+//                 .help("复制文件夹或文件")
+//                 .short('x')
+//                 .long("xcopy"),
+//         )
+//         .arg(
+//             Arg::new("source_path")
+//                 .help("Sets the XCopy source path or file")
+//                 .index(1),
+//         )
+//         .arg(
+//             Arg::new("target_path")
+//                 .help("Sets the XCopy target path")
+//                 .index(2),
+//         );
 
-    #[cfg(feature = "server")]
-    let app = app.arg(
-        Arg::new("server")
-            .help("作为服务器启动文件服务")
-            .short('s')
-            .long("server")
-            .conflicts_with("download")
-            .conflicts_with("update"),
-    );
+//     #[cfg(feature = "server")]
+//     let app = app.arg(
+//         Arg::new("server")
+//             .help("作为服务器启动文件服务")
+//             .short('s')
+//             .long("server")
+//             .conflicts_with("download")
+//             .conflicts_with("update"),
+//     );
 
-    #[cfg(feature = "download")]
-    let app = app
-        .arg(
-            Arg::new("download")
-                .help("作为客户端下载所有文件")
-                .short('d')
-                .long("download")
-                .conflicts_with("server")
-                .conflicts_with("update"),
-        )
-        .arg(
-            Arg::new("update")
-                .help("作为客户端下载更新文件")
-                .short('u')
-                .long("update")
-                .conflicts_with("server")
-                .conflicts_with("download"),
-        );
-    app.get_matches()
-}
+//     #[cfg(feature = "download")]
+//     let app = app
+//         .arg(
+//             Arg::new("download")
+//                 .help("作为客户端下载所有文件")
+//                 .short('d')
+//                 .long("download")
+//                 .conflicts_with("server")
+//                 .conflicts_with("update"),
+//         )
+//         .arg(
+//             Arg::new("update")
+//                 .help("作为客户端下载更新文件")
+//                 .short('u')
+//                 .long("update")
+//                 .conflicts_with("server")
+//                 .conflicts_with("download"),
+//         );
+//     app.get_matches()
+// }
 
 fn time_taken(start_time: Instant) -> String {
     let dur = Instant::now() - start_time;
