@@ -12,6 +12,8 @@ use std::path::Path;
 use tokio::fs::{self, DirBuilder, File};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::task;
+use std::io;
+use std::io::Write;
 
 pub fn base_url(config: &Value) -> String {
     let server = config["server"].str("192.168.100.4");
@@ -67,6 +69,10 @@ pub async fn get_part_of_file(
             //u64::from_str_radix(take_val.unwrap().to_str()?, 10)?
             (take_val.unwrap().to_str()?).parse::<u64>()?
         };
+        io::stdout().flush()?;
+
+        print!("#");
+
         let bytes = response.bytes().await?.to_vec();
         Ok((skip, take, bytes))
     } else if response.status() == StatusCode::NOT_ACCEPTABLE
